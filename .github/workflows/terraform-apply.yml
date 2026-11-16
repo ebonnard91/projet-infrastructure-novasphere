@@ -1,0 +1,82 @@
+# Pipeline de déploiement :
+#   - au merge sur main : apply de dev à partir du fichier de plan, puis apply de prod
+#     derrière l'environnement GitHub "prod" (approbation obligatoire) ;
+#   - à la demande (Actions > terraform-apply > Run workflow) : redéploiement complet,
+#     utile après un Start Lab pour recréer l'infrastructure détruite en fin de session.
+# La détection de dérive est dans un workflow séparé.
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+    # Un merge qui ne touche que la documentation ne redéploie rien.
+    paths:
+      - "envs/**"
+      - ".github/workflows/terraform-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.14.x"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  # Identifiants de session du Learner Lab du référent AWS (scripts/ci-secrets.sh).
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+  AWS_REGION: us-east-1
+  TF_VAR_owner: ${{ vars.OWNER }}
+
+jobs:
+  apply-dev:
+    name: apply dev
+    runs-on: ubuntu-latest
+    environment: dev
+    # Deux déploiements du même environnement ne tournent jamais en même temps.
+    concurrency: tfstate-dev
+    defaults:
+      run:
+        working-directory: envs/dev
+    env:
+      TF_VAR_environment: dev
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD_DEV }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform init
+      # Le plan est enregistré dans un fichier puis appliqué tel quel : l'apply
+      # n'exécute que ce que le plan a affiché, sans le recalculer.
+      - run: terraform plan -lock-timeout=5m -out=tfplan
+      - run: terraform apply -lock-timeout=5m tfplan
+      - name: URL de l'ALB
+        run: echo "dev : http://$(terraform output -raw alb_dns_name)" >> "$GITHUB_STEP_SUMMARY"
+
+  apply-prod:
+    name: apply prod
+    needs: apply-dev
+    runs-on: ubuntu-latest
+    # Environnement protégé : le job attend l'approbation d'un relecteur requis.
+    environment: prod
+    concurrency: tfstate-prod
+    defaults:
+      run:
+        working-directory: envs/prod
+    env:
+      TF_VAR_environment: prod
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform init
+      - run: terraform plan -lock-timeout=5m -out=tfplan
+      - run: terraform apply -lock-timeout=5m tfplan
+      - name: URL de l'ALB
+        run: echo "prod : http://$(terraform output -raw alb_dns_name)" >> "$GITHUB_STEP_SUMMARY"

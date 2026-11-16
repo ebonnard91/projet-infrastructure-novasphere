@@ -1,0 +1,156 @@
+# Pipeline de pull request : sécurité (gitleaks, checkov), qualité (fmt, validate)
+# et plan de dev et de prod posté en commentaire de la PR.
+# Aucun apply ici : le déploiement est fait par terraform-apply.yml au merge sur main.
+name: terraform-pr
+
+on:
+  pull_request:
+    branches: [main]
+
+# Moindre privilège : lecture du code, écriture des commentaires de PR uniquement.
+permissions:
+  contents: read
+  pull-requests: write
+
+# Un nouveau push sur la PR annule le run précédent (évite deux plans concurrents).
+concurrency:
+  group: terraform-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.14.x"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  # 1. Recherche de secrets dans tout l'historique Git de la branche.
+  gitleaks:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # historique complet : un secret supprimé reste dans Git
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2. Analyse statique de sécurité du code Terraform.
+  checkov:
+    name: Scan IaC (checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: envs
+          framework: terraform
+          download_external_modules: true # scanne aussi le module de l'équipe
+          # Bloquant par défaut (soft_fail: false).
+
+  # 3. Format et validation
+  fmt-validate:
+    name: fmt et validate (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, prod]
+    defaults:
+      run:
+        working-directory: envs/${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff
+      - name: terraform init (sans backend)
+        run: terraform init -backend=false
+      - run: terraform validate
+
+  # 4. Plan sur le state partagé, posté en commentaire de la PR.
+  plan:
+    name: plan (${{ matrix.env }})
+    needs: [gitleaks, checkov, fmt-validate]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, prod]
+    # Pas de groupe concurrency ici : le verrou S3 du state (use_lockfile) et
+    # -lock-timeout sérialisent déjà les plans, sans risquer qu'un plan de PR
+    # remplace un apply en attente dans la file GitHub.
+    defaults:
+      run:
+        working-directory: envs/${{ matrix.env }}
+    env:
+      # Identifiants de session du Learner Lab du référent AWS (scripts/ci-secrets.sh).
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_REGION: us-east-1
+      # terraform.tfvars n'est jamais commité : les valeurs passent par TF_VAR_.
+      TF_VAR_environment: ${{ matrix.env }}
+      TF_VAR_owner: ${{ vars.OWNER }}
+      # Un secret par environnement : DB_PASSWORD_DEV / DB_PASSWORD_PROD.
+      # Un secret absent donne une valeur vide (le plan échoue), jamais celui de l'autre env.
+      TF_VAR_db_password: ${{ secrets[format('DB_PASSWORD_{0}', matrix.env)] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform init
+      # shell: bash explicite => "-eo pipefail" : le step échoue si terraform échoue,
+      # même derrière tee (qui affiche le plan en direct et l'écrit dans plan.txt).
+      - name: terraform plan
+        id: plan
+        shell: bash
+        run: terraform plan -no-color -lock-timeout=5m 2>&1 | tee plan.txt
+      # Publié aussi quand le plan échoue, pour que l'erreur soit lisible dans la PR.
+      - name: Commentaire du plan sur la PR
+        if: ${{ !cancelled() && steps.plan.outcome != 'skipped' }}
+        uses: actions/github-script@v7
+        env:
+          ENV_NAME: ${{ matrix.env }}
+          PLAN_OK: ${{ steps.plan.outcome == 'success' }}
+          PLAN_FILE: envs/${{ matrix.env }}/plan.txt
+        with:
+          script: |
+            const fs = require('fs');
+            const env = process.env.ENV_NAME;
+            const ok = process.env.PLAN_OK === 'true';
+            const marker = `<!-- terraform-plan-${env} -->`;
+            let plan = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
+            const max = 60000; // limite GitHub : 65 536 caractères par commentaire
+            if (plan.length > max) {
+              plan = '... (début tronqué, voir les logs du run)\n' + plan.slice(-max);
+            }
+            const body = [
+              marker,
+              `### Terraform plan \`${env}\` ${ok ? '✅' : '❌ échec'}`,
+              '',
+              '<details><summary>Afficher le plan</summary>',
+              '',
+              '```text',
+              plan,
+              '```',
+              '</details>',
+              '',
+              `Commit \`${context.payload.pull_request.head.sha.slice(0, 7)}\`, run [#${context.runNumber}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+            ].join('\n');
+            // Met à jour le commentaire existant de cet environnement au lieu d'en empiler.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const previous = comments.find(c => c.body.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }
