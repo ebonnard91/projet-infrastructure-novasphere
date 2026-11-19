@@ -1,6 +1,7 @@
 
 module "web_stack" {
-  source = "../../../terraform-aws-web-stack"
+  #checkov:skip=CKV_TF_1:Version figee par tag, voir SECURITE.md section 3
+  source = "git::https://github.com/ebonnard91/terraform-aws-security-group.git?ref=v1.0.0"
 
   project_name          = "novasphere"
   environment           = var.environment
@@ -11,6 +12,7 @@ module "web_stack" {
   instance_type         = var.instance_type
   instance_profile_name = var.instance_profile_name
   ssm_parameter_name    = aws_ssm_parameter.db_password.name
+  domain_name           = var.domain_name
   desired_capacity      = var.desired_capacity
 
   depends_on = [

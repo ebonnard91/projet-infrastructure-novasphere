@@ -6,7 +6,7 @@ output "alb_dns_name" {
 
 output "application_url" {
   description = "URL de l'application NovaSphere DEV"
-  value       = "http://${module.web_stack.alb_dns_name}"
+  value       = "https://${var.domain_name}"
 }
 
 output "target_group_arn" {
@@ -17,4 +17,9 @@ output "target_group_arn" {
 output "autoscaling_group_name" {
   description = "Nom de l'Auto Scaling Group"
   value       = module.web_stack.autoscaling_group_name
+}
+
+output "acm_validation_records" {
+  description = "CNAME a creer chez le registrar pour valider le certificat ACM"
+  value       = module.web_stack.acm_validation_records
 }

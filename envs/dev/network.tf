@@ -1,6 +1,7 @@
 module "vpc" {
+  #checkov:skip=CKV_TF_1:Version exacte du registry, voir SECURITE.md section 3
   source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 6.0"
+  version = "6.8.0"
 
   name = "novasphere-${var.environment}"
   cidr = "10.0.0.0/16"

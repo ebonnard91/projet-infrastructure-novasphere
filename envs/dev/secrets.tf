@@ -5,6 +5,7 @@ variable "db_password" {
 }
 
 resource "aws_ssm_parameter" "db_password" {
+  #checkov:skip=CKV_AWS_337:Chiffre par la cle geree aws/ssm ; une cle KMS dediee (CMK) est hors perimetre du Learner Lab (cout, IAM verrouille)
   name             = "/novasphere/${var.environment}/db_password"
   type             = "SecureString"
   value_wo         = var.db_password
