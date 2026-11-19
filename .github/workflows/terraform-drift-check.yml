@@ -1,0 +1,89 @@
+# Workflow réutilisable : compare l'infrastructure réelle au code d'un environnement.
+# Appelé par terraform-drift.yml, une fois par environnement.
+# terraform plan -detailed-exitcode : 0 = aucune dérive, 1 = erreur, 2 = dérive détectée.
+name: terraform-drift-check
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "dev ou prod"
+        type: string
+        required: true
+    outputs:
+      drift:
+        description: "true si une dérive a été détectée"
+        value: ${{ jobs.plan.outputs.drift }}
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.14.x"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  plan:
+    name: plan -detailed-exitcode (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    # Pas d'environnement GitHub : le contrôle de prod ne doit pas attendre d'approbation.
+    # Pas de groupe concurrency (comme le plan de PR) : rejoindre tfstate-<env> pourrait
+    # remplacer un apply en attente dans la file GitHub. Le verrou S3 (use_lockfile)
+    # et -lock-timeout suffisent à ne pas lire le state pendant un apply.
+    defaults:
+      run:
+        working-directory: envs/${{ inputs.environment }}
+    outputs:
+      drift: ${{ steps.plan.outputs.drift }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_REGION: us-east-1
+      TF_VAR_environment: ${{ inputs.environment }}
+      TF_VAR_owner: ${{ vars.OWNER }}
+      TF_VAR_db_password: ${{ secrets[format('DB_PASSWORD_{0}', inputs.environment)] }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false 
+      - run: terraform init
+
+      - name: terraform plan -detailed-exitcode
+        id: plan
+        shell: bash
+        run: |
+          set +e
+          terraform plan -no-color -lock-timeout=5m -detailed-exitcode -out=drift.tfplan 2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          case "$code" in
+            0) echo "drift=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "drift=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::terraform plan a échoué (code $code)"; exit "$code" ;;
+          esac
+
+      - name: Résumé
+        if: ${{ !cancelled() && steps.plan.outputs.drift != '' }}
+        shell: bash
+        run: |
+          {
+            echo "## Dérive ${{ inputs.environment }}"
+            if [ "${{ steps.plan.outputs.drift }}" = "true" ]; then
+              echo ":warning: **Dérive détectée** : l'infrastructure ne correspond plus au code."
+              echo '```text'
+              grep -E '^\s*# |^Plan:' plan.txt || true
+              echo '```'
+            else
+              echo ":white_check_mark: Aucune dérive : l'infrastructure correspond au code."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Échec si dérive
+        if: steps.plan.outputs.drift == 'true'
+        run: |
+          echo "::error::Dérive détectée sur ${{ inputs.environment }}"
+          exit 1
