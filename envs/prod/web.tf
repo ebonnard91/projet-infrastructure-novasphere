@@ -1,7 +1,7 @@
 
 module "web_stack" {
   #checkov:skip=CKV_TF_1:Version figee par tag, voir SECURITE.md section 3
-  source = "git::https://github.com/ebonnard91/terraform-aws-security-group.git?ref=v1.0.0"
+  source = "git::https://github.com/ebonnard91/terraform-aws-web-stack.git?ref=v1.0.0"
 
   project_name          = "novasphere"
   environment           = var.environment
