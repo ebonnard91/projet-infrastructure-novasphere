@@ -47,3 +47,9 @@ variable "desired_capacity" {
     error_message = "La capacite doit etre comprise entre 2 et 4."
   }
 }
+
+variable "domain_name" {
+  description = "Nom de domaine public de l'application (certificat ACM + listener HTTPS)"
+  type        = string
+  default     = "app.aero-nex.fr"
+}

@@ -4,3 +4,4 @@ aws_region            = "us-east-1"
 instance_type         = "t3.small"
 instance_profile_name = "LabInstanceProfile"
 desired_capacity      = 2
+domain_name           = "app.aero-nex.fr"

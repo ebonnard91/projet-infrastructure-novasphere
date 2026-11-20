@@ -35,3 +35,9 @@ variable "instance_profile_name" {
   type        = string
   default     = "LabInstanceProfile"
 }
+
+variable "domain_name" {
+  description = "Nom de domaine public de l'application (certificat ACM + listener HTTPS)"
+  type        = string
+  default     = "dev.aero-nex.fr"
+}
