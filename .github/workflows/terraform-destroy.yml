@@ -1,0 +1,147 @@
+# Pipeline de destruction :
+#   - uniquement à la demande (Actions > terraform-destroy > Run workflow), jamais
+#     déclenchée par un push, une PR ou un autre workflow ;
+#   - refusée tant que le dernier run de terraform-apply sur main n'est pas terminé
+#     avec succès (pas de destroy pendant ou après un apply en échec) ;
+#   - refusée si le state de l'environnement visé est vide (rien n'a été appliqué).
+# Ordre inverse du déploiement : prod d'abord (approbation obligatoire), puis dev.
+name: terraform-destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environnement à détruire"
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - prod
+          - dev-et-prod
+      confirmation:
+        description: 'Taper "DESTROY" pour confirmer'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read # lecture de l'historique des runs de terraform-apply
+
+env:
+  TF_VERSION: "1.14.x"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  # Identifiants de session du Learner Lab du référent AWS (scripts/ci-secrets.sh).
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+  AWS_REGION: us-east-1
+  TF_VAR_owner: ${{ vars.OWNER }}
+
+jobs:
+  # 1. Garde-fous : confirmation saisie et dernier apply réussi.
+  precheck:
+    name: vérifications
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [ "$CONFIRMATION" != "DESTROY" ]; then
+            echo "::error::Confirmation invalide : taper DESTROY pour lancer la destruction."
+            exit 1
+          fi
+      - name: Dernier terraform-apply terminé avec succès
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow terraform-apply.yml \
+                  --branch main --limit 1 --json status,conclusion,url \
+                  --jq '.[0] // empty')
+          if [ -z "$run" ]; then
+            echo "::error::Aucun run de terraform-apply sur main : rien à détruire."
+            exit 1
+          fi
+          status=$(jq -r .status <<< "$run")
+          conclusion=$(jq -r .conclusion <<< "$run")
+          url=$(jq -r .url <<< "$run")
+          if [ "$status" != "completed" ]; then
+            echo "::error::terraform-apply est en cours ($status) : attendre la fin avant de détruire. $url"
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::Le dernier terraform-apply a échoué ($conclusion) : destroy refusé. $url"
+            exit 1
+          fi
+          echo "Dernier apply OK : $url" >> "$GITHUB_STEP_SUMMARY"
+
+  # 2. Destruction de prod, derrière l'environnement protégé (approbation requise).
+  destroy-prod:
+    name: destroy prod
+    needs: precheck
+    if: ${{ inputs.environment == 'prod' || inputs.environment == 'dev-et-prod' }}
+    runs-on: ubuntu-latest
+    environment: prod
+    # Même groupe que terraform-apply : un destroy et un apply du même
+    # environnement ne tournent jamais en même temps.
+    concurrency: tfstate-prod
+    defaults:
+      run:
+        working-directory: envs/prod
+    env:
+      TF_VAR_environment: prod
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD_PROD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform init
+      - name: Environnement déployé
+        run: |
+          if [ -z "$(terraform state list)" ]; then
+            echo "::error::State prod vide : aucun apply à détruire."
+            exit 1
+          fi
+      # Plan de destruction enregistré puis appliqué tel quel, comme pour l'apply.
+      - run: terraform plan -destroy -lock-timeout=5m -out=tfplan
+      - run: terraform apply -lock-timeout=5m tfplan
+      - run: echo "prod détruit" >> "$GITHUB_STEP_SUMMARY"
+
+  # 3. Destruction de dev (après prod si les deux sont demandés).
+  destroy-dev:
+    name: destroy dev
+    needs: [precheck, destroy-prod]
+    if: >-
+      ${{ !cancelled()
+          && needs.precheck.result == 'success'
+          && (needs.destroy-prod.result == 'success' || needs.destroy-prod.result == 'skipped')
+          && (inputs.environment == 'dev' || inputs.environment == 'dev-et-prod') }}
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency: tfstate-dev
+    defaults:
+      run:
+        working-directory: envs/dev
+    env:
+      TF_VAR_environment: dev
+      TF_VAR_db_password: ${{ secrets.DB_PASSWORD_DEV }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - run: terraform init
+      - name: Environnement déployé
+        run: |
+          if [ -z "$(terraform state list)" ]; then
+            echo "::error::State dev vide : aucun apply à détruire."
+            exit 1
+          fi
+      - run: terraform plan -destroy -lock-timeout=5m -out=tfplan
+      - run: terraform apply -lock-timeout=5m tfplan
+      - run: echo "dev détruit" >> "$GITHUB_STEP_SUMMARY"
