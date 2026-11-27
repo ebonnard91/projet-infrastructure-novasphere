@@ -1,0 +1,33 @@
+# Cache Terraform (providers, modules téléchargés) : recréé par terraform init
+.terraform/
+
+# State et ses sauvegardes : il vit dans le bucket S3, jamais dans Git
+*.tfstate
+*.tfstate.*
+
+# Fichiers de plan : peuvent contenir des valeurs sensibles
+tfplan
+*.tfplan
+
+# Variables locales : terraform.tfvars n'est jamais commité ;
+# le modèle terraform.tfvars.example reste versionné
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Overrides locaux et journaux de crash
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+crash.log
+crash.*.log
+
+# Clés et variables d'environnement
+*.pem
+*.key
+.env
+.env.*
+
+# Inventaires Ansible
+ansible/inventory*.ini
