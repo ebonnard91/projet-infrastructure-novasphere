@@ -54,7 +54,8 @@ jobs:
       - run: terraform plan -lock-timeout=5m -out=tfplan
       - run: terraform apply -lock-timeout=5m tfplan
       - name: URL de l'ALB
-        run: echo "dev : http://$(terraform output -raw alb_dns_name)" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "dev : http://$(terraform output -raw alb_dns_name)" >> "$GITHUB_STEP_SUMMARY"
 
   apply-prod:
     name: apply prod
@@ -79,4 +80,5 @@ jobs:
       - run: terraform plan -lock-timeout=5m -out=tfplan
       - run: terraform apply -lock-timeout=5m tfplan
       - name: URL de l'ALB
-        run: echo "prod : http://$(terraform output -raw alb_dns_name)" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo "prod : http://$(terraform output -raw alb_dns_name)" >> "$GITHUB_STEP_SUMMARY"
