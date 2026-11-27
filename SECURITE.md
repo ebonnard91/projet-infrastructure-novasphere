@@ -185,7 +185,7 @@ gitleaks git --verbose .
 
 | Outil | Règle | Ressource | Décision (corrigé / accepté) | Justification |
 |---|---|---|---|---|
-| checkov | | | | |
+| checkov | `CKV2_AWS_12` (SG par défaut du VPC qui laisse passer du trafic) | `module.vpc.aws_vpc.this` (dev, prod) | accepté (faux positif) | Le module adopte le SG par défaut (`manage_default_security_group = true`) et lui retire toutes les règles (`default_security_group_ingress` et `_egress` vides, écrits explicitement dans `network.tf`). checkov ne suit pas ce lien à l'intérieur du module. Vérifiable après apply : `aws ec2 describe-security-groups --filters Name=vpc-id,Values=<vpc> Name=group-name,Values=default` ne renvoie aucune règle. |
 | gitleaks | | | | |
 
 ## 4. Politique IAM idéale de l'instance et écart OIDC
