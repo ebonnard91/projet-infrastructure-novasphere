@@ -1,6 +1,7 @@
 module "vpc" {
   #checkov:skip=CKV_TF_1:Version exacte du registry, voir SECURITE.md section 3
   #checkov:skip=CKV2_AWS_12:Faux positif, SG par defaut adopte par le module sans aucune regle (lignes default_security_group ci-dessous), voir SECURITE.md section 3
+  #checkov:skip=CKV_AWS_130:Pas de NAT Gateway, IP publique requise pour SSM et les depots ; entrees limitees a l'ALB par le SG web, voir SECURITE.md section 3
   source  = "terraform-aws-modules/vpc/aws"
   version = "6.8.0"
 
