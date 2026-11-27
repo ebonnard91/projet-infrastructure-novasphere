@@ -185,7 +185,7 @@ gitleaks git --verbose .
 
 | Outil | Règle | Ressource | Décision (corrigé / accepté) | Justification |
 |---|---|---|---|---|
-| checkov | | | | |
+| checkov | `CKV_AWS_130` (subnet qui attribue une IP publique au lancement) | `module.vpc.aws_subnet.public` (dev, prod) | accepté | Pas de NAT Gateway (coût du lab) : les instances sont en subnet public et ont besoin d'une IP publique pour joindre SSM et les dépôts de paquets. Aucune entrée directe : le SG web n'accepte que le SG de l'ALB. Correction hors lab : subnets privés + NAT Gateway (voir ARCHITECTURE.md). |
 | gitleaks | | | | |
 
 ## 4. Politique IAM idéale de l'instance et écart OIDC
