@@ -185,6 +185,7 @@ gitleaks git --verbose .
 
 | Outil | Règle | Ressource | Décision (corrigé / accepté) | Justification |
 |---|---|---|---|---|
+| checkov | `CKV2_AWS_12` (SG par défaut du VPC qui laisse passer du trafic) | `module.vpc.aws_vpc.this` (dev, prod) | accepté (faux positif) | Le module adopte le SG par défaut (`manage_default_security_group = true`) et lui retire toutes les règles (`default_security_group_ingress` et `_egress` vides, écrits explicitement dans `network.tf`). checkov ne suit pas ce lien à l'intérieur du module. Vérifiable après apply : `aws ec2 describe-security-groups --filters Name=vpc-id,Values=<vpc> Name=group-name,Values=default` ne renvoie aucune règle. |
 | checkov | `CKV_AWS_130` (subnet qui attribue une IP publique au lancement) | `module.vpc.aws_subnet.public` (dev, prod) | accepté | Pas de NAT Gateway (coût du lab) : les instances sont en subnet public et ont besoin d'une IP publique pour joindre SSM et les dépôts de paquets. Aucune entrée directe : le SG web n'accepte que le SG de l'ALB. Correction hors lab : subnets privés + NAT Gateway (voir ARCHITECTURE.md). |
 | gitleaks | | | | |
 
