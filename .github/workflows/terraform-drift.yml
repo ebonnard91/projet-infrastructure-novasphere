@@ -1,0 +1,28 @@
+# Détection de dérive (drift) : pipeline déclenchable à la main.
+# Elle ne fait aucun travail Terraform elle-même : elle appelle le workflow
+# réutilisable terraform-drift-check.yml, une fois par environnement.
+name: terraform-drift
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environnement à contrôler"
+        type: choice
+        options: [all, dev, prod]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: drift-${{ matrix.environment }}
+    strategy:
+      fail-fast: false # une dérive en dev ne doit pas annuler le contrôle de prod
+      matrix:
+        environment: ${{ fromJSON(inputs.environment == 'all' && '["dev","prod"]' || format('["{0}"]', inputs.environment)) }}
+    uses: ./.github/workflows/terraform-drift-check.yml
+    with:
+      environment: ${{ matrix.environment }}
+    secrets: inherit
